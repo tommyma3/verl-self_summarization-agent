@@ -1,5 +1,8 @@
 import json
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from self_summarization_agent.export import build_run_record
 from self_summarization_agent.runtime import build_smoke_result
 
