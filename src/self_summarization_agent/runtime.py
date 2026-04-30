@@ -88,6 +88,8 @@ def parse_model_tool_call(raw_output: str) -> tuple[dict[str, object], str] | No
 def extract_summary_output(raw_output: str) -> SummaryExtraction:
     extracted = _extract_completed_thinking(raw_output)
     if extracted is None:
+        if _THINK_START_RE.search(raw_output):
+            return SummaryExtraction(thinking="", summary="")
         return SummaryExtraction(thinking="", summary=raw_output.strip())
     return SummaryExtraction(thinking=extracted.thinking, summary=extracted.remainder)
 

@@ -25,6 +25,13 @@ def test_extract_summary_output_uses_post_think_body() -> None:
     assert summary.summary == "summary body"
 
 
+def test_extract_summary_output_rejects_incomplete_thinking() -> None:
+    summary = extract_summary_output("<think>unfinished summary reasoning")
+
+    assert summary.thinking == ""
+    assert summary.summary == ""
+
+
 def test_action_prompt_includes_remaining_budget() -> None:
     model = ScriptedModel([tool_output('{"tool_name": "finish", "arguments": {"answer": "done"}}')])
     runtime = EpisodeRuntime(
@@ -133,3 +140,29 @@ def test_summary_is_trainable_step_but_uses_summary_state() -> None:
     assert result.generation_steps[2].is_trainable is True
     assert "summary reasoning" not in result.generation_steps[3].prompt
     assert "### SUMMARY\nsummary body" in result.generation_steps[3].prompt
+
+
+def test_incomplete_summary_does_not_enter_later_context() -> None:
+    model = ScriptedModel(
+        [
+            tool_output('{"tool_name": "search", "arguments": {"query": "first"}}'),
+            tool_output('{"tool_name": "search", "arguments": {"query": "second"}}'),
+            "<think>unfinished summary reasoning",
+            tool_output('{"tool_name": "finish", "arguments": {"answer": "done"}}'),
+        ]
+    )
+    runtime = EpisodeRuntime(
+        model=model,
+        backend=FakeBackend(search_index={"first": ["old"], "second": ["new"]}, documents={}),
+        context_threshold_tokens=1,
+        max_context_tokens=4096,
+        max_tool_calls=5,
+        token_counter=lambda text: text.count("new"),
+    )
+
+    result = runtime.run("q1", "question")
+
+    assert result.status == "completed"
+    assert "unfinished summary reasoning" not in result.generation_steps[3].prompt
+    assert "### SUMMARY" not in result.generation_steps[3].prompt
+    assert result.summary_turns == []
