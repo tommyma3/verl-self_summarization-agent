@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verl-self-summarization-agent"
+version = "0.1.0"
+description = "rLLM/verl self-summarization agent for BrowseComp-Plus"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "PyYAML>=6.0.2",
+  "datasets>=4.0.0",
+  "transformers>=4.57.0",
+  "torch>=2.7.0",
+  "openai>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.0",
+]
+
+[project.optional-dependencies]
+retrieval = [
+  "faiss-cpu>=1.13.2",
+  "pyserini>=2.0.0; python_version >= '3.12'",
+  "tevatron",
+]
+serving = [
+  "vllm>=0.17.0",
+]
+rllm = [
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
