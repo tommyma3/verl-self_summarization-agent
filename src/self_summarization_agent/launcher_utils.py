@@ -50,6 +50,17 @@ def serialize_runtime_result(result: RuntimeResult, *, query_text: str, judge: d
         "final_answer": result.final_answer,
         "summary_turns": list(result.summary_turns),
         "turn_records": list(result.turn_records),
+        "generation_steps": [
+            {
+                "step_id": step.step_id,
+                "kind": step.kind,
+                "prompt": step.prompt,
+                "completion": step.completion,
+                "parsed_tool_name": step.parsed_tool_name,
+                "is_trainable": step.is_trainable,
+            }
+            for step in result.generation_steps
+        ],
         "retrieved_docids": list(result.retrieved_docids),
         "tool_call_counts": dict(result.tool_call_counts),
         "judge": judge,
