@@ -1,4 +1,7 @@
 **/__pycache__/
+.pytest_cache/
+.pytest-tmp-*/
+.uv-cache/
 artifacts
 runs
 reference
