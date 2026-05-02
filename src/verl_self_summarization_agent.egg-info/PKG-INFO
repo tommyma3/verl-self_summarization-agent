@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: verl-self-summarization-agent
+Version: 0.1.0
+Summary: rLLM/verl self-summarization agent for BrowseComp-Plus
+Requires-Python: <3.12,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: PyYAML>=6.0.2
+Requires-Dist: datasets>=4.0.0
+Requires-Dist: transformers>=4.57.0
+Requires-Dist: torch>=2.7.0
+Requires-Dist: openai>=1.0.0
+Provides-Extra: retrieval
+Requires-Dist: faiss-cpu>=1.13.2; extra == "retrieval"
+Requires-Dist: pyserini>=2.0.0; python_version >= "3.12" and extra == "retrieval"
+Requires-Dist: tevatron; extra == "retrieval"
+Provides-Extra: serving
+Requires-Dist: vllm>=0.17.0; extra == "serving"
+Provides-Extra: rllm

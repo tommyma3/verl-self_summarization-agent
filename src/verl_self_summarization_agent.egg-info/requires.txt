@@ -1,0 +1,17 @@
+PyYAML>=6.0.2
+datasets>=4.0.0
+transformers>=4.57.0
+torch>=2.7.0
+openai>=1.0.0
+
+[retrieval]
+faiss-cpu>=1.13.2
+tevatron
+
+[retrieval:python_version >= "3.12"]
+pyserini>=2.0.0
+
+[rllm]
+
+[serving]
+vllm>=0.17.0

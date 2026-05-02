@@ -1,0 +1,84 @@
+experiment:
+  name: qwen-bcplus-rllm
+  seed: 7
+  output_root: artifacts
+  bc_plus_root: bc-plus
+
+dataset:
+  decrypted_path:
+  queries_tsv_path:
+  offset: 0
+  limit:
+  shuffle: false
+  train_limit: 200
+  eval_limit: 10
+
+retrieval:
+  backend: faiss
+  top_k: 5
+  snippet_max_tokens: 512
+  document_max_tokens: 8192
+  snippet_tokenizer_path:
+  index_path: bc-plus/indexes/qwen3-embedding-8b/corpus.shard*.pkl
+  model_name: Qwen/Qwen3-Embedding-8B
+  normalize: true
+  pooling: eos
+  torch_dtype: bfloat16
+  dataset_name: Tevatron/browsecomp-plus-corpus
+  max_length: 8192
+
+model:
+  backend: vllm_offline
+  model_path: Qwen/Qwen3.5-9B
+  dtype: bfloat16
+  device_map: auto
+  max_new_tokens: 8192
+  temperature: 0.7
+  top_p: 0.95
+  do_sample: true
+  trust_remote_code: false
+  enable_thinking: true
+
+rollout:
+  backend: rllm_gateway
+  gpu_ids: []
+  tensor_parallel_size: 1
+  attention_backend:
+  max_model_len: 65536
+  max_concurrent_episodes: 32
+  max_new_tokens: 8192
+  temperature: 0.7
+  top_p: 0.95
+  do_sample: true
+
+runtime:
+  context_threshold_tokens: 24000
+  max_context_tokens: 65536
+  tool_budget: 20
+
+judge:
+  enabled: true
+  max_new_tokens: 4096
+  temperature: 0.0
+  top_p: 1.0
+  do_sample: false
+
+training:
+  backend: rllm_verl
+  gpu_ids: []
+  group_size: 4
+  learning_rate: 1.0e-6
+  steps: 100
+
+rllm:
+  backend: verl
+  algorithm: grpo
+  train_batch_size: 8
+  rollout_group_size: 4
+  max_prompt_length: 65536
+  max_response_length: 8192
+  total_training_steps: 100
+  save_freq: 10
+  eval_freq: 0
+  project_name: self-summarization-agent
+  experiment_name: rllm-verl

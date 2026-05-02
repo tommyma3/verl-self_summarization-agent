@@ -53,6 +53,10 @@ def build_rllm_evaluator(judge: RewardJudge):
     @rllm.evaluator
     def score(task: dict[str, Any], episode: Any) -> Any:
         artifacts = dict(getattr(episode, "artifacts", {}) or {})
+        if not artifacts:
+            episode_info = getattr(episode, "info", {}) or {}
+            if isinstance(episode_info, dict):
+                artifacts = dict(episode_info.get("artifacts", {}) or {})
         result = evaluate_episode_artifacts(task=task, artifacts=artifacts, judge=judge)
         return EvalOutput(
             reward=result["reward"],

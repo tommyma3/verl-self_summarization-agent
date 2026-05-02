@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/self_summarization_agent/__init__.py
+src/self_summarization_agent/backend.py
+src/self_summarization_agent/export.py
+src/self_summarization_agent/models.py
+src/self_summarization_agent/prompts.py
+src/self_summarization_agent/runtime.py
+src/verl_self_summarization_agent.egg-info/PKG-INFO
+src/verl_self_summarization_agent.egg-info/SOURCES.txt
+src/verl_self_summarization_agent.egg-info/dependency_links.txt
+src/verl_self_summarization_agent.egg-info/requires.txt
+src/verl_self_summarization_agent.egg-info/top_level.txt
+tests/test_cli.py

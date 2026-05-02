@@ -1,6 +1,11 @@
+from dataclasses import dataclass
+from types import SimpleNamespace
+import sys
+import types
+
 from self_summarization_agent.backend import FakeBackend
 from self_summarization_agent.config import RuntimeConfig
-from self_summarization_agent.rllm_agent import OpenAICompatibleGenerator, run_self_summarization_episode
+from self_summarization_agent.rllm_agent import OpenAICompatibleGenerator, build_rllm_rollout, run_self_summarization_episode
 
 
 class FakeChoiceMessage:
@@ -97,3 +102,75 @@ def test_artifacts_keep_raw_generation_steps_without_turn_records() -> None:
     completions = [step["completion"] for step in artifacts["generation_steps"]]
     assert all("<think>reason</think>" in completion for completion in completions)
     assert "turn_records" not in artifacts
+
+
+def test_rllm_rollout_returns_trainable_steps(monkeypatch) -> None:
+    @dataclass
+    class FakeStep:
+        chat_completions: list[dict[str, str]]
+        observation: str
+        action: object
+        model_response: str
+        info: dict[str, object]
+        done: bool
+
+    @dataclass
+    class FakeTrajectory:
+        name: str
+        task: dict[str, str]
+        steps: list[FakeStep]
+        info: dict[str, object]
+
+    @dataclass
+    class FakeEpisode:
+        task: dict[str, str]
+        trajectories: list[FakeTrajectory]
+        artifacts: dict[str, object]
+
+    rllm_module = types.ModuleType("rllm")
+    rllm_module.__path__ = []
+    rllm_module.rollout = lambda func: func
+    agents_module = types.ModuleType("rllm.agents")
+    agents_module.__path__ = []
+    agent_module = types.ModuleType("rllm.agents.agent")
+    agent_module.Episode = FakeEpisode
+    agent_module.Trajectory = FakeTrajectory
+    agent_module.Step = FakeStep
+    monkeypatch.setitem(sys.modules, "rllm", rllm_module)
+    monkeypatch.setitem(sys.modules, "rllm.agents", agents_module)
+    monkeypatch.setitem(sys.modules, "rllm.agents.agent", agent_module)
+
+    openai_module = types.ModuleType("openai")
+    openai_module.OpenAI = lambda **kwargs: FakeClient(
+        [
+            tool_output('{"tool_name": "search", "arguments": {"query": "q"}}'),
+            tool_output('{"tool_name": "finish", "arguments": {"answer": "done"}}'),
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+
+    config = SimpleNamespace(
+        model=SimpleNamespace(
+            model_path="policy",
+            max_new_tokens=128,
+            temperature=0.7,
+            top_p=0.95,
+        ),
+        runtime=RuntimeConfig(context_threshold_tokens=1000, max_context_tokens=4096, tool_budget=3),
+    )
+    rollout = build_rllm_rollout(
+        config=config,
+        backend=FakeBackend(search_index={"q": ["d1"]}, documents={"d1": "fact"}),
+    )
+
+    episode = rollout(
+        {"query_id": "q1", "query": "question", "answer": "done"},
+        {"base_url": "http://localhost:8000/v1"},
+    )
+
+    steps = episode.trajectories[0].steps
+    assert len(steps) == 2
+    assert all(step.info["is_trainable"] for step in steps)
+    assert steps[0].action["tool_name"] == "search"
+    assert steps[-1].done is True
+    assert episode.artifacts["generation_steps"][0]["completion"] == steps[0].model_response

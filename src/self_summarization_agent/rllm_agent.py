@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Any
 
 from self_summarization_agent.launcher_utils import build_runtime
@@ -71,15 +72,94 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
-def _load_rllm_types(rllm: Any) -> tuple[type[Any], type[Any]]:
+def _load_rllm_types(rllm: Any) -> tuple[type[Any], type[Any], type[Any]]:
     try:
-        from rllm.types import Episode, Trajectory
+        from rllm.agents.agent import Episode, Step, Trajectory
     except ImportError:
-        Episode = getattr(rllm, "Episode", None)
-        Trajectory = getattr(rllm, "Trajectory", None)
-        if Episode is None or Trajectory is None:
-            raise
-    return Episode, Trajectory
+        try:
+            from rllm.types import Episode, Step, Trajectory
+        except ImportError:
+            Episode = getattr(rllm, "Episode", None)
+            Trajectory = getattr(rllm, "Trajectory", None)
+            Step = getattr(rllm, "Step", None)
+            if Episode is None or Trajectory is None or Step is None:
+                raise
+    return Episode, Trajectory, Step
+
+
+def _build_step_action(step: dict[str, Any]) -> Any:
+    parsed_tool_name = step.get("parsed_tool_name")
+    if parsed_tool_name is None:
+        return None
+    return {
+        "tool_name": parsed_tool_name,
+        "kind": step.get("kind"),
+    }
+
+
+def _generation_steps_to_rllm_steps(Step: type[Any], generation_steps: list[dict[str, Any]]) -> list[Any]:
+    rllm_steps: list[Any] = []
+    for index, step in enumerate(generation_steps):
+        prompt = str(step.get("prompt") or "")
+        completion = str(step.get("completion") or "")
+        rllm_steps.append(
+            Step(
+                chat_completions=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": completion},
+                ],
+                observation=prompt,
+                action=_build_step_action(step),
+                model_response=completion,
+                info={
+                    "step_id": step.get("step_id"),
+                    "kind": step.get("kind"),
+                    "parsed_tool_name": step.get("parsed_tool_name"),
+                    "is_trainable": bool(step.get("is_trainable")),
+                },
+                done=index == len(generation_steps) - 1,
+            )
+        )
+    return rllm_steps
+
+
+def _construct_supported(cls: type[Any], **kwargs: Any) -> Any:
+    parameters = inspect.signature(cls).parameters
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return cls(**kwargs)
+    return cls(**{key: value for key, value in kwargs.items() if key in parameters})
+
+
+def _build_episode(
+    Episode: type[Any],
+    Trajectory: type[Any],
+    *,
+    task_data: dict[str, Any],
+    trajectory_steps: list[Any],
+    artifacts: dict[str, Any],
+) -> Any:
+    trajectory = _construct_supported(
+        Trajectory,
+        name="self_summarization_agent",
+        task=task_data,
+        steps=trajectory_steps,
+        reward=None,
+        info={"status": artifacts["status"]},
+    )
+    episode = _construct_supported(
+        Episode,
+        task=task_data,
+        trajectories=[trajectory],
+        metrics={},
+        info={"artifacts": artifacts},
+        artifacts=artifacts,
+    )
+    if not hasattr(episode, "artifacts"):
+        try:
+            setattr(episode, "artifacts", artifacts)
+        except (AttributeError, TypeError):
+            pass
+    return episode
 
 
 def build_rllm_rollout(config: Any, backend: Any) -> Any:
@@ -92,7 +172,7 @@ def build_rllm_rollout(config: Any, backend: Any) -> Any:
         ) from exc
 
     try:
-        Episode, Trajectory = _load_rllm_types(rllm)
+        Episode, Trajectory, Step = _load_rllm_types(rllm)
     except ImportError as exc:
         raise ImportError(
             "rLLM Episode and Trajectory types are required to build the rollout. "
@@ -116,8 +196,13 @@ def build_rllm_rollout(config: Any, backend: Any) -> Any:
             backend=backend,
             runtime_config=config.runtime,
         )
-        return Episode(
-            trajectories=[Trajectory(name="self_summarization_agent", steps=[])],
+        generation_steps = payload["artifacts"]["generation_steps"]
+        trajectory_steps = _generation_steps_to_rllm_steps(Step, generation_steps)
+        return _build_episode(
+            Episode,
+            Trajectory,
+            task_data=task_data,
+            trajectory_steps=trajectory_steps,
             artifacts=payload["artifacts"],
         )
 

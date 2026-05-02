@@ -119,6 +119,21 @@ class TrainingConfig:
 
 
 @dataclass(slots=True)
+class RLLMConfig:
+    backend: str = "verl"
+    algorithm: str = "grpo"
+    train_batch_size: int = 8
+    rollout_group_size: int = 4
+    max_prompt_length: int = 65536
+    max_response_length: int = 8192
+    total_training_steps: int = 100
+    save_freq: int = 10
+    eval_freq: int = 0
+    project_name: str = "self-summarization-agent"
+    experiment_name: str = "rllm-verl"
+
+
+@dataclass(slots=True)
 class RunConfig:
     experiment: ExperimentConfig
     dataset: DatasetConfig
@@ -138,6 +153,7 @@ class TrainConfig:
     judge: JudgeConfig
     training: TrainingConfig
     rollout: RolloutConfig = field(default_factory=RolloutConfig)
+    rllm: RLLMConfig = field(default_factory=RLLMConfig)
 
 
 def _parse_override_value(raw_value: str) -> Any:
@@ -232,6 +248,7 @@ def load_train_config(path: str | Path, overrides: dict[str, Any] | None = None)
         judge=JudgeConfig(**_require_section(raw, "judge")),
         training=training,
         rollout=_derive_rollout_config(raw, training),
+        rllm=RLLMConfig(**_require_section(raw, "rllm")),
     )
 
 
