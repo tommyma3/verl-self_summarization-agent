@@ -1,17 +1,25 @@
 PyYAML>=6.0.2
 datasets>=4.0.0
+numpy<2.0,>=1.26
+packaging<26.0,>=25.0
 transformers>=4.57.0
-torch>=2.7.0
+torch==2.8.0
+torchvision
 openai>=1.0.0
 
 [retrieval]
 faiss-cpu>=1.13.2
+pyserini>=0.22.0
+qwen-omni-utils>=0.0.8
 tevatron
 
-[retrieval:python_version >= "3.12"]
-pyserini>=2.0.0
-
 [rllm]
+verl==0.6.1
+rllm @ git+https://github.com/rllm-org/rllm.git
+rllm-model-gateway>=0.1.0
+simple-term-menu>=1.6
+tinker>=0.18.2
+tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook.git
 
 [serving]
-vllm>=0.17.0
+vllm==0.11.0

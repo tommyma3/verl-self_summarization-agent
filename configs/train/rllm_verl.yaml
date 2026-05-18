@@ -20,16 +20,16 @@ retrieval:
   document_max_tokens: 8192
   snippet_tokenizer_path:
   index_path: bc-plus/indexes/qwen3-embedding-8b/corpus.shard*.pkl
-  model_name: Qwen/Qwen3-Embedding-8B
+  model_name: /124090467/Qwen/Qwen3-Embedding-8B
   normalize: true
   pooling: eos
   torch_dtype: bfloat16
-  dataset_name: Tevatron/browsecomp-plus-corpus
+  dataset_name: /124090467/hf_datasets/Tevatron/browsecomp-plus-corpus
   max_length: 8192
 
 model:
   backend: vllm_offline
-  model_path: Qwen/Qwen3.5-9B
+  model_path: /124090467/Qwen/Qwen3.5-9B
   dtype: bfloat16
   device_map: auto
   max_new_tokens: 8192

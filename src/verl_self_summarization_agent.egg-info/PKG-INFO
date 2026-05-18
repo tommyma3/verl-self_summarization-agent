@@ -6,13 +6,51 @@ Requires-Python: <3.12,>=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: PyYAML>=6.0.2
 Requires-Dist: datasets>=4.0.0
+Requires-Dist: numpy<2.0,>=1.26
+Requires-Dist: packaging<26.0,>=25.0
 Requires-Dist: transformers>=4.57.0
-Requires-Dist: torch>=2.7.0
+Requires-Dist: torch==2.8.0
+Requires-Dist: torchvision
 Requires-Dist: openai>=1.0.0
 Provides-Extra: retrieval
 Requires-Dist: faiss-cpu>=1.13.2; extra == "retrieval"
-Requires-Dist: pyserini>=2.0.0; python_version >= "3.12" and extra == "retrieval"
+Requires-Dist: pyserini>=0.22.0; extra == "retrieval"
+Requires-Dist: qwen-omni-utils>=0.0.8; extra == "retrieval"
 Requires-Dist: tevatron; extra == "retrieval"
 Provides-Extra: serving
-Requires-Dist: vllm>=0.17.0; extra == "serving"
+Requires-Dist: vllm==0.11.0; extra == "serving"
 Provides-Extra: rllm
+Requires-Dist: verl==0.6.1; extra == "rllm"
+Requires-Dist: rllm @ git+https://github.com/rllm-org/rllm.git ; extra == "rllm"
+Requires-Dist: rllm-model-gateway>=0.1.0; extra == "rllm"
+Requires-Dist: simple-term-menu>=1.6; extra == "rllm"
+Requires-Dist: tinker>=0.18.2; extra == "rllm"
+Requires-Dist: tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook.git ; extra == "rllm"
+
+# rLLM Self-Summarization Agent
+
+This project is an rLLM/verl self-summarization agent for BrowseComp-Plus. The
+runtime records each trainable agent step, including tool calls, summaries, and
+final answers, so rLLM can assign trajectory-level advantages back to the full
+episode.
+
+Smoke check:
+
+```bash
+python main.py
+```
+
+Run evaluation rollouts:
+
+```bash
+python -m self_summarization_agent.run_launcher --config configs/run/default.yaml
+```
+
+Train with rLLM/verl:
+
+```bash
+python -m self_summarization_agent.train_rllm --config configs/train/rllm_verl.yaml
+```
+
+The `retrieval`, `serving`, and `rllm` extras are only needed in real retrieval,
+model-serving, or rLLM training environments.

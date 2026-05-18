@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(uv pip *)",
+      "Bash(uv run *)",
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(pip index *)",
+      "Bash(python -c \"import pyserini; print\\(pyserini.__version__\\)\")"
+    ]
+  }
+}

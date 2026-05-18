@@ -44,11 +44,14 @@ def evaluate_episode_artifacts(
 def build_rllm_evaluator(judge: RewardJudge):
     try:
         import rllm
-        from rllm.experimental.eval.types import EvalOutput, Signal
     except ImportError as exc:
         raise ImportError(
             "rLLM is required to build the evaluator. Install the rllm extra in the training environment."
         ) from exc
+    try:
+        from rllm.experimental.eval.types import EvalOutput, Signal
+    except ImportError:
+        from rllm.eval.types import EvalOutput, Signal
 
     @rllm.evaluator
     def score(task: dict[str, Any], episode: Any) -> Any:
