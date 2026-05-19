@@ -6,7 +6,8 @@ import os
 from typing import Any, Protocol
 
 import torch
-from transformers import AutoModelForMultimodalLM, AutoTokenizer
+import transformers
+from transformers import AutoTokenizer
 
 from self_summarization_agent.config import JudgeConfig, ModelConfig
 
@@ -237,9 +238,24 @@ def _load_transformers_model(
     device_map: str,
     trust_remote_code: bool,
 ) -> Any:
-    return AutoModelForMultimodalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch_dtype,
-        device_map=device_map,
-        trust_remote_code=trust_remote_code,
+    load_kwargs = {
+        "torch_dtype": torch_dtype,
+        "device_map": device_map,
+        "trust_remote_code": trust_remote_code,
+    }
+    auto_model_names = (
+        "AutoModelForCausalLM",
+        "AutoModelForImageTextToText",
+        "AutoModelForVision2Seq",
     )
+    errors: list[str] = []
+    for auto_model_name in auto_model_names:
+        auto_model_cls = getattr(transformers, auto_model_name, None)
+        if auto_model_cls is None:
+            continue
+        try:
+            return auto_model_cls.from_pretrained(model_path, **load_kwargs)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{auto_model_name}: {exc}")
+    details = "\n".join(errors) if errors else "No compatible Transformers auto model classes are available."
+    raise ValueError(f"Could not load model {model_path!r} with Transformers.\n{details}")

@@ -11,7 +11,20 @@ def test_load_rllm_train_config() -> None:
 
     assert config.training.backend == "rllm_verl"
     assert config.rllm.backend == "verl"
+    assert config.rllm.logger == ["file"]
+    assert config.rllm.gpu_memory_utilization == 0.75
     assert config.runtime.tool_budget > 0
+
+
+def test_build_trainer_config_sets_vllm_memory_utilization() -> None:
+    config = load_train_config(Path("configs/train/rllm_verl.yaml"))
+
+    trainer_config = train_rllm.build_trainer_config(config)
+
+    assert trainer_config.actor_rollout_ref.rollout.gpu_memory_utilization == 0.75
+    assert trainer_config.actor_rollout_ref.rollout.max_model_len == 65536
+    assert trainer_config.data.train_batch_size == 8
+    assert trainer_config.rllm.trainer.total_batches == 100
 
 
 def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
@@ -65,4 +78,6 @@ def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
     assert captured["agent_flow"] == ("flow", "backend")
     assert captured["evaluator"] == ("evaluator", "generator")
     assert captured["train_dataset"] == ["task"]
-    assert captured["config"]["algorithm"] == "grpo"
+    assert captured["config"].rllm.algorithm.adv_estimator == "grpo"
+    assert captured["config"].rllm.trainer.logger == ["file"]
+    assert captured["config"].actor_rollout_ref.rollout.gpu_memory_utilization == 0.75

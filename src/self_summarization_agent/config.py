@@ -122,6 +122,7 @@ class TrainingConfig:
 class RLLMConfig:
     backend: str = "verl"
     algorithm: str = "grpo"
+    logger: list[str] = field(default_factory=lambda: ["file"])
     train_batch_size: int = 8
     rollout_group_size: int = 4
     max_prompt_length: int = 65536
@@ -131,6 +132,7 @@ class RLLMConfig:
     eval_freq: int = 0
     project_name: str = "self-summarization-agent"
     experiment_name: str = "rllm-verl"
+    gpu_memory_utilization: float = 0.75
 
 
 @dataclass(slots=True)

@@ -73,6 +73,8 @@ training:
 rllm:
   backend: verl
   algorithm: grpo
+  logger:
+    - file
   train_batch_size: 8
   rollout_group_size: 4
   max_prompt_length: 65536
@@ -82,3 +84,4 @@ rllm:
   eval_freq: 0
   project_name: self-summarization-agent
   experiment_name: rllm-verl
+  gpu_memory_utilization: 0.75
