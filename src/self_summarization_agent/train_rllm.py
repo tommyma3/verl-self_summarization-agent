@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+from pathlib import Path
+import site
+import sys
 from typing import Any
 
 from self_summarization_agent.config import load_train_config, parse_cli_overrides
@@ -48,9 +52,14 @@ def build_trainer_config(config: Any) -> Any:
         "data.trust_remote_code": config.model.trust_remote_code,
         "actor_rollout_ref.model.path": config.model.model_path,
         "actor_rollout_ref.model.trust_remote_code": config.model.trust_remote_code,
+        "actor_rollout_ref.actor.ppo_mini_batch_size": config.rllm.ppo_mini_batch_size,
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": config.rllm.ppo_micro_batch_size_per_gpu,
         "actor_rollout_ref.actor.optim.lr": config.training.learning_rate,
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": config.rllm.ppo_micro_batch_size_per_gpu,
+        "actor_rollout_ref.rollout.name": "vllm",
         "actor_rollout_ref.rollout.dtype": config.model.dtype,
         "actor_rollout_ref.rollout.gpu_memory_utilization": config.rllm.gpu_memory_utilization,
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": config.rllm.ppo_micro_batch_size_per_gpu,
         "actor_rollout_ref.rollout.tensor_model_parallel_size": config.rollout.tensor_parallel_size,
         "actor_rollout_ref.rollout.max_model_len": config.rollout.max_model_len,
         "actor_rollout_ref.rollout.prompt_length": config.rllm.max_prompt_length,
@@ -90,7 +99,53 @@ def build_trainer_config(config: Any) -> Any:
     return trainer_config
 
 
+def ensure_worker_library_paths() -> None:
+    """Expose venv CUDA/Torch shared libraries to Ray worker processes."""
+    candidate_dirs: list[str] = []
+    for root in [*site.getsitepackages(), str(Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")]:
+        site_root = Path(root)
+        candidate_dirs.extend(str(path) for path in site_root.glob("nvidia/**/lib") if path.is_dir())
+        torch_lib = site_root / "torch" / "lib"
+        if torch_lib.is_dir():
+            candidate_dirs.append(str(torch_lib))
+
+    existing = [part for part in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if part]
+    updated = [path for path in candidate_dirs if path not in existing]
+    if updated:
+        os.environ["LD_LIBRARY_PATH"] = os.pathsep.join([*updated, *existing])
+
+
+def build_reward_judge(
+    *,
+    model_config: Any,
+    judge_config: Any,
+    gpu_memory_utilization: float | None,
+) -> Any:
+    from self_summarization_agent.generation import build_generator
+    from self_summarization_agent.judge import RewardJudge
+
+    return RewardJudge(
+        build_generator(
+            model_config,
+            judge_config=judge_config,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
+    )
+
+
+def build_search_backend(
+    *,
+    bc_plus_root: str,
+    retrieval_config: Any,
+) -> Any:
+    from self_summarization_agent.bcplus_backend import build_backend
+
+    return build_backend(bc_plus_root, retrieval_config)
+
+
 def build_trainer(config: Any) -> Any:
+    ensure_worker_library_paths()
+
     try:
         from rllm.experimental.unified_trainer import AgentTrainer
     except ImportError as exc:
@@ -98,22 +153,31 @@ def build_trainer(config: Any) -> Any:
             "rLLM is required for train_rllm.py. Install the rllm extra in the training environment."
         ) from exc
 
-    from self_summarization_agent.bcplus_backend import build_backend
-    from self_summarization_agent.generation import build_generator
-    from self_summarization_agent.judge import RewardJudge
     from self_summarization_agent.rllm_agent import build_rllm_rollout
-    from self_summarization_agent.rllm_dataset import build_rllm_tasks
+    from self_summarization_agent.rllm_dataset import build_rllm_dataset
     from self_summarization_agent.rllm_evaluator import build_rllm_evaluator
 
-    tasks = build_rllm_tasks(
+    train_dataset = build_rllm_dataset(
         bc_plus_root=config.experiment.bc_plus_root,
         dataset_config=config.dataset,
         seed=config.experiment.seed,
+        name=f"{config.experiment.name}-rllm",
+        split="train",
     )
-    backend = build_backend(config.experiment.bc_plus_root, config.retrieval)
-    judge = RewardJudge(build_generator(config.model, judge_config=config.judge))
-    agent_flow = build_rllm_rollout(config=config, backend=backend)
-    evaluator = build_rllm_evaluator(judge)
+    agent_flow = build_rllm_rollout(
+        config=config,
+        backend_factory=lambda: build_search_backend(
+            bc_plus_root=config.experiment.bc_plus_root,
+            retrieval_config=config.retrieval,
+        ),
+    )
+    evaluator = build_rllm_evaluator(
+        judge_factory=lambda: build_reward_judge(
+            model_config=config.model,
+            judge_config=config.judge,
+            gpu_memory_utilization=config.rllm.gpu_memory_utilization,
+        )
+    )
     trainer_config = build_trainer_config(config)
 
     return AgentTrainer(
@@ -121,7 +185,8 @@ def build_trainer(config: Any) -> Any:
         agent_flow=agent_flow,
         evaluator=evaluator,
         config=trainer_config,
-        train_dataset=tasks,
+        train_dataset=train_dataset,
+        val_dataset=train_dataset,
     )
 
 

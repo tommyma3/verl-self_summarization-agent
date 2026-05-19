@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,9 +17,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _ensure_bc_plus_searcher_imports(bc_plus_root: str | Path) -> None:
-    searcher_root = str(Path(bc_plus_root) / "searcher")
+    searcher_root = str((Path(bc_plus_root) / "searcher").resolve())
     if searcher_root not in sys.path:
         sys.path.insert(0, searcher_root)
+    pythonpath_parts = [part for part in os.environ.get("PYTHONPATH", "").split(os.pathsep) if part]
+    if searcher_root not in pythonpath_parts:
+        os.environ["PYTHONPATH"] = os.pathsep.join([searcher_root, *pythonpath_parts])
 
 
 def _build_searcher_args(retrieval_config: RetrievalConfig) -> argparse.Namespace:

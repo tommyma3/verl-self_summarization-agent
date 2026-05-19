@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from self_summarization_agent.dataset import QueryExample
@@ -41,26 +42,54 @@ def evaluate_episode_artifacts(
     }
 
 
-def build_rllm_evaluator(judge: RewardJudge):
+def build_rllm_evaluator(
+    judge: RewardJudge | None = None,
+    *,
+    judge_factory: Callable[[], RewardJudge] | None = None,
+):
+    if judge is None and judge_factory is None:
+        raise ValueError("Either judge or judge_factory must be provided.")
+
     try:
         import rllm
     except ImportError as exc:
         raise ImportError(
             "rLLM is required to build the evaluator. Install the rllm extra in the training environment."
         ) from exc
+    evaluator = getattr(rllm, "evaluator", None)
+    if evaluator is None:
+        try:
+            from rllm.eval.rollout_decorator import evaluator
+        except ImportError as exc:
+            raise ImportError(
+                "rLLM evaluator decorator is required to build the evaluator. "
+                "Install a compatible rLLM version in the training environment."
+            ) from exc
     try:
         from rllm.experimental.eval.types import EvalOutput, Signal
     except ImportError:
         from rllm.eval.types import EvalOutput, Signal
 
-    @rllm.evaluator
+    cached_judge = judge
+
+    @evaluator
     def score(task: dict[str, Any], episode: Any) -> Any:
+        nonlocal cached_judge
+        if cached_judge is None:
+            if judge_factory is None:
+                raise RuntimeError("No judge or judge_factory is available for evaluator scoring.")
+            cached_judge = judge_factory()
+
         artifacts = dict(getattr(episode, "artifacts", {}) or {})
         if not artifacts:
             episode_info = getattr(episode, "info", {}) or {}
             if isinstance(episode_info, dict):
                 artifacts = dict(episode_info.get("artifacts", {}) or {})
-        result = evaluate_episode_artifacts(task=task, artifacts=artifacts, judge=judge)
+        if not artifacts:
+            episode_metadata = getattr(episode, "metadata", {}) or {}
+            if isinstance(episode_metadata, dict):
+                artifacts = dict(episode_metadata.get("artifacts", {}) or {})
+        result = evaluate_episode_artifacts(task=task, artifacts=artifacts, judge=cached_judge)
         return EvalOutput(
             reward=result["reward"],
             is_correct=result["is_correct"],

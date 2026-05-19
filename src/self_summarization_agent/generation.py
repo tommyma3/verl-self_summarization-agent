@@ -114,6 +114,7 @@ class VLLMGenerator:
     top_p: float
     do_sample: bool
     tensor_parallel_size: int = 1
+    gpu_memory_utilization: float = 0.75
     attention_backend: str | None = None
     max_model_len: int | None = None
     trust_remote_code: bool = False
@@ -140,6 +141,7 @@ class VLLMGenerator:
             "model": self.model_path,
             "trust_remote_code": self.trust_remote_code,
             "tensor_parallel_size": self.tensor_parallel_size,
+            "gpu_memory_utilization": self.gpu_memory_utilization,
             "max_model_len": self.max_model_len,
         }
         supported_kwargs = set(inspect.signature(LLM).parameters)
@@ -196,7 +198,12 @@ class VLLMGenerator:
         return completions
 
 
-def build_generator(model_config: ModelConfig, *, judge_config: JudgeConfig | None = None) -> TextGenerator:
+def build_generator(
+    model_config: ModelConfig,
+    *,
+    judge_config: JudgeConfig | None = None,
+    gpu_memory_utilization: float | None = None,
+) -> TextGenerator:
     max_new_tokens = judge_config.max_new_tokens if judge_config else model_config.max_new_tokens
     temperature = judge_config.temperature if judge_config else model_config.temperature
     top_p = judge_config.top_p if judge_config else model_config.top_p
@@ -223,6 +230,11 @@ def build_generator(model_config: ModelConfig, *, judge_config: JudgeConfig | No
             top_p=top_p,
             do_sample=do_sample,
             tensor_parallel_size=model_config.tensor_parallel_size,
+            gpu_memory_utilization=(
+                model_config.gpu_memory_utilization
+                if gpu_memory_utilization is None
+                else gpu_memory_utilization
+            ),
             attention_backend=model_config.attention_backend,
             max_model_len=model_config.max_model_len,
             trust_remote_code=model_config.trust_remote_code,

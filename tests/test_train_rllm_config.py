@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sys
 import types
 
@@ -22,9 +23,32 @@ def test_build_trainer_config_sets_vllm_memory_utilization() -> None:
     trainer_config = train_rllm.build_trainer_config(config)
 
     assert trainer_config.actor_rollout_ref.rollout.gpu_memory_utilization == 0.75
+    assert trainer_config.actor_rollout_ref.rollout.name == "vllm"
     assert trainer_config.actor_rollout_ref.rollout.max_model_len == 65536
+    assert trainer_config.actor_rollout_ref.actor.ppo_mini_batch_size == 8
+    assert trainer_config.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 1
+    assert trainer_config.actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu == 1
+    assert trainer_config.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu == 1
     assert trainer_config.data.train_batch_size == 8
     assert trainer_config.rllm.trainer.total_batches == 100
+
+
+def test_ensure_worker_library_paths_adds_venv_shared_libraries(monkeypatch, tmp_path: Path) -> None:
+    site_packages = tmp_path / "site-packages"
+    cuda_lib = site_packages / "nvidia" / "cu13" / "lib"
+    torch_lib = site_packages / "torch" / "lib"
+    cuda_lib.mkdir(parents=True)
+    torch_lib.mkdir(parents=True)
+    monkeypatch.setattr(train_rllm.site, "getsitepackages", lambda: [str(site_packages)])
+    monkeypatch.setattr(train_rllm.sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/existing")
+
+    train_rllm.ensure_worker_library_paths()
+
+    paths = os.environ["LD_LIBRARY_PATH"].split(os.pathsep)
+    assert str(cuda_lib) in paths
+    assert str(torch_lib) in paths
+    assert paths[-1] == "/existing"
 
 
 def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
@@ -46,9 +70,12 @@ def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "rllm.experimental.unified_trainer", trainer_module)
 
     backend_module = types.ModuleType("self_summarization_agent.bcplus_backend")
-    backend_module.build_backend = lambda bc_plus_root, retrieval_config: "backend"
     generation_module = types.ModuleType("self_summarization_agent.generation")
-    generation_module.build_generator = lambda model_config, *, judge_config=None: "generator"
+    def fake_build_generator(model_config, *, judge_config=None, gpu_memory_utilization=None):
+        captured["judge_gpu_memory_utilization"] = gpu_memory_utilization
+        return "generator"
+
+    generation_module.build_generator = fake_build_generator
 
     judge_module = types.ModuleType("self_summarization_agent.judge")
 
@@ -58,11 +85,14 @@ def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
 
     judge_module.RewardJudge = FakeJudge
     rollout_module = types.ModuleType("self_summarization_agent.rllm_agent")
-    rollout_module.build_rllm_rollout = lambda *, config, backend: ("flow", backend)
+    rollout_module.build_rllm_rollout = lambda *, config, backend_factory: ("flow", backend_factory())
+    backend_module.build_backend = lambda bc_plus_root, retrieval_config: ("backend", bc_plus_root, retrieval_config.backend)
     dataset_module = types.ModuleType("self_summarization_agent.rllm_dataset")
-    dataset_module.build_rllm_tasks = lambda *, bc_plus_root, dataset_config, seed: ["task"]
+    dataset_module.build_rllm_dataset = (
+        lambda *, bc_plus_root, dataset_config, seed, name, split: ("dataset", name, split)
+    )
     evaluator_module = types.ModuleType("self_summarization_agent.rllm_evaluator")
-    evaluator_module.build_rllm_evaluator = lambda judge: ("evaluator", judge.generator)
+    evaluator_module.build_rllm_evaluator = lambda *, judge_factory: ("evaluator", judge_factory().generator)
 
     monkeypatch.setitem(sys.modules, "self_summarization_agent.bcplus_backend", backend_module)
     monkeypatch.setitem(sys.modules, "self_summarization_agent.generation", generation_module)
@@ -75,9 +105,11 @@ def test_build_trainer_wires_rllm_components(monkeypatch) -> None:
 
     assert isinstance(trainer, FakeTrainer)
     assert captured["backend"] == "verl"
-    assert captured["agent_flow"] == ("flow", "backend")
+    assert captured["agent_flow"] == ("flow", ("backend", "bc-plus", "faiss"))
     assert captured["evaluator"] == ("evaluator", "generator")
-    assert captured["train_dataset"] == ["task"]
+    assert captured["train_dataset"] == ("dataset", "qwen-bcplus-rllm-rllm", "train")
+    assert captured["val_dataset"] == ("dataset", "qwen-bcplus-rllm-rllm", "train")
     assert captured["config"].rllm.algorithm.adv_estimator == "grpo"
     assert captured["config"].rllm.trainer.logger == ["file"]
     assert captured["config"].actor_rollout_ref.rollout.gpu_memory_utilization == 0.75
+    assert captured["judge_gpu_memory_utilization"] == 0.75

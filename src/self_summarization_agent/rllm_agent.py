@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 import inspect
 from typing import Any
 
@@ -74,10 +75,10 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
 
 def _load_rllm_types(rllm: Any) -> tuple[type[Any], type[Any], type[Any]]:
     try:
-        from rllm.agents.agent import Episode, Step, Trajectory
+        from rllm.types import Episode, Step, Trajectory
     except ImportError:
         try:
-            from rllm.types import Episode, Step, Trajectory
+            from rllm.agents.agent import Episode, Step, Trajectory
         except ImportError:
             Episode = getattr(rllm, "Episode", None)
             Trajectory = getattr(rllm, "Trajectory", None)
@@ -102,8 +103,15 @@ def _generation_steps_to_rllm_steps(Step: type[Any], generation_steps: list[dict
     for index, step in enumerate(generation_steps):
         prompt = str(step.get("prompt") or "")
         completion = str(step.get("completion") or "")
+        metadata = {
+            "step_id": step.get("step_id"),
+            "kind": step.get("kind"),
+            "parsed_tool_name": step.get("parsed_tool_name"),
+            "is_trainable": bool(step.get("is_trainable")),
+        }
         rllm_steps.append(
-            Step(
+            _construct_supported(
+                Step,
                 chat_completions=[
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": completion},
@@ -111,12 +119,8 @@ def _generation_steps_to_rllm_steps(Step: type[Any], generation_steps: list[dict
                 observation=prompt,
                 action=_build_step_action(step),
                 model_response=completion,
-                info={
-                    "step_id": step.get("step_id"),
-                    "kind": step.get("kind"),
-                    "parsed_tool_name": step.get("parsed_tool_name"),
-                    "is_trainable": bool(step.get("is_trainable")),
-                },
+                metadata=metadata,
+                info=metadata,
                 done=index == len(generation_steps) - 1,
             )
         )
@@ -144,6 +148,7 @@ def _build_episode(
         task=task_data,
         steps=trajectory_steps,
         reward=None,
+        metadata={"status": artifacts["status"]},
         info={"status": artifacts["status"]},
     )
     episode = _construct_supported(
@@ -151,6 +156,7 @@ def _build_episode(
         task=task_data,
         trajectories=[trajectory],
         metrics={},
+        metadata={"artifacts": artifacts},
         info={"artifacts": artifacts},
         artifacts=artifacts,
     )
@@ -162,7 +168,29 @@ def _build_episode(
     return episode
 
 
-def build_rllm_rollout(config: Any, backend: Any) -> Any:
+def _load_rllm_rollout_decorator(rllm: Any) -> Any:
+    rollout = getattr(rllm, "rollout", None)
+    if rollout is not None:
+        return rollout
+    try:
+        from rllm.eval.rollout_decorator import rollout
+    except ImportError as exc:
+        raise ImportError(
+            "rLLM rollout decorator is required to build the rollout. "
+            "Install a compatible rLLM version in the training environment."
+        ) from exc
+    return rollout
+
+
+def build_rllm_rollout(
+    config: Any,
+    backend: Any | None = None,
+    *,
+    backend_factory: Callable[[], Any] | None = None,
+) -> Any:
+    if backend is None and backend_factory is None:
+        raise ValueError("Either backend or backend_factory must be provided.")
+
     try:
         import rllm
         from openai import OpenAI
@@ -179,8 +207,17 @@ def build_rllm_rollout(config: Any, backend: Any) -> Any:
             "Install a compatible rLLM version in the training environment."
         ) from exc
 
-    @rllm.rollout
+    rollout = _load_rllm_rollout_decorator(rllm)
+    cached_backend = backend
+
+    @rollout
     def solve(task: Any, agent_config: Any) -> Any:
+        nonlocal cached_backend
+        if cached_backend is None:
+            if backend_factory is None:
+                raise RuntimeError("No backend or backend_factory is available for rollout execution.")
+            cached_backend = backend_factory()
+
         task_data = _get_attr(task, "data", task)
         client = OpenAI(base_url=_get_attr(agent_config, "base_url"), api_key=_get_attr(agent_config, "api_key", "EMPTY"))
         generator = OpenAICompatibleGenerator(
@@ -193,7 +230,7 @@ def build_rllm_rollout(config: Any, backend: Any) -> Any:
         payload = run_self_summarization_episode(
             task=task_data,
             generator=generator,
-            backend=backend,
+            backend=cached_backend,
             runtime_config=config.runtime,
         )
         generation_steps = payload["artifacts"]["generation_steps"]

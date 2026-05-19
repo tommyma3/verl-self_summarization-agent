@@ -158,10 +158,18 @@ def test_rllm_rollout_returns_trainable_steps(monkeypatch) -> None:
         ),
         runtime=RuntimeConfig(context_threshold_tokens=1000, max_context_tokens=4096, tool_budget=3),
     )
+    backend_calls = 0
+
+    def build_backend():
+        nonlocal backend_calls
+        backend_calls += 1
+        return FakeBackend(search_index={"q": ["d1"]}, documents={"d1": "fact"})
+
     rollout = build_rllm_rollout(
         config=config,
-        backend=FakeBackend(search_index={"q": ["d1"]}, documents={"d1": "fact"}),
+        backend_factory=build_backend,
     )
+    assert backend_calls == 0
 
     episode = rollout(
         {"query_id": "q1", "query": "question", "answer": "done"},
@@ -174,3 +182,75 @@ def test_rllm_rollout_returns_trainable_steps(monkeypatch) -> None:
     assert steps[0].action["tool_name"] == "search"
     assert steps[-1].done is True
     assert episode.artifacts["generation_steps"][0]["completion"] == steps[0].model_response
+    assert backend_calls == 1
+
+
+def test_rllm_rollout_falls_back_when_top_level_decorator_is_missing(monkeypatch) -> None:
+    @dataclass
+    class FakeStep:
+        chat_completions: list[dict[str, str]]
+        observation: str
+        action: object
+        model_response: str
+        metadata: dict[str, object]
+        done: bool
+
+    @dataclass
+    class FakeTrajectory:
+        name: str
+        task: dict[str, str]
+        steps: list[FakeStep]
+        metadata: dict[str, object]
+
+    @dataclass
+    class FakeEpisode:
+        task: dict[str, str]
+        trajectories: list[FakeTrajectory]
+        artifacts: dict[str, object]
+        metadata: dict[str, object]
+
+    rllm_module = types.ModuleType("rllm")
+    rllm_module.__path__ = []
+    agents_module = types.ModuleType("rllm.agents")
+    agents_module.__path__ = []
+    agent_module = types.ModuleType("rllm.agents.agent")
+    agent_module.Episode = FakeEpisode
+    agent_module.Trajectory = FakeTrajectory
+    agent_module.Step = FakeStep
+    eval_module = types.ModuleType("rllm.eval")
+    eval_module.__path__ = []
+    decorator_module = types.ModuleType("rllm.eval.rollout_decorator")
+    decorator_module.rollout = lambda func: func
+    monkeypatch.setitem(sys.modules, "rllm", rllm_module)
+    monkeypatch.setitem(sys.modules, "rllm.agents", agents_module)
+    monkeypatch.setitem(sys.modules, "rllm.agents.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "rllm.eval", eval_module)
+    monkeypatch.setitem(sys.modules, "rllm.eval.rollout_decorator", decorator_module)
+
+    openai_module = types.ModuleType("openai")
+    openai_module.OpenAI = lambda **kwargs: FakeClient(
+        [tool_output('{"tool_name": "finish", "arguments": {"answer": "done"}}')]
+    )
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+
+    config = SimpleNamespace(
+        model=SimpleNamespace(
+            model_path="policy",
+            max_new_tokens=128,
+            temperature=0.7,
+            top_p=0.95,
+        ),
+        runtime=RuntimeConfig(context_threshold_tokens=1000, max_context_tokens=4096, tool_budget=3),
+    )
+
+    rollout = build_rllm_rollout(
+        config=config,
+        backend=FakeBackend(search_index={}, documents={}),
+    )
+    episode = rollout(
+        {"query_id": "q1", "query": "question", "answer": "done"},
+        {"base_url": "http://localhost:8000/v1"},
+    )
+
+    assert episode.trajectories[0].steps[0].metadata["is_trainable"] is True
+    assert episode.metadata["artifacts"]["status"] == "completed"

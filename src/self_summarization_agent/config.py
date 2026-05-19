@@ -62,6 +62,7 @@ class ModelConfig:
     top_p: float = 1.0
     do_sample: bool = False
     tensor_parallel_size: int = 1
+    gpu_memory_utilization: float = 0.75
     attention_backend: str | None = None
     max_model_len: int | None = None
     trust_remote_code: bool = False
@@ -124,6 +125,8 @@ class RLLMConfig:
     algorithm: str = "grpo"
     logger: list[str] = field(default_factory=lambda: ["file"])
     train_batch_size: int = 8
+    ppo_mini_batch_size: int = 8
+    ppo_micro_batch_size_per_gpu: int = 1
     rollout_group_size: int = 4
     max_prompt_length: int = 65536
     max_response_length: int = 8192
