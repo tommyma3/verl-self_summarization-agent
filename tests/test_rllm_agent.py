@@ -76,6 +76,28 @@ def test_run_self_summarization_episode_records_all_generation_steps() -> None:
     assert all(step["is_trainable"] for step in result["artifacts"]["generation_steps"])
 
 
+def test_run_self_summarization_episode_accepts_task_metadata_object() -> None:
+    client = FakeClient([tool_output('{"tool_name": "finish", "arguments": {"answer": "done"}}')])
+    generator = OpenAICompatibleGenerator(
+        client=client,
+        model="policy",
+        max_new_tokens=128,
+        temperature=0.7,
+        top_p=0.95,
+    )
+    task = SimpleNamespace(metadata={"query_id": "q1", "query": "question", "answer": "done"})
+
+    result = run_self_summarization_episode(
+        task=task,
+        generator=generator,
+        backend=FakeBackend(search_index={}, documents={}),
+        runtime_config=RuntimeConfig(context_threshold_tokens=1000, max_context_tokens=4096, tool_budget=3),
+    )
+
+    assert result["artifacts"]["query_id"] == "q1"
+    assert result["artifacts"]["answer"] == "done"
+
+
 def test_artifacts_keep_raw_generation_steps_without_turn_records() -> None:
     client = FakeClient(
         [
@@ -102,6 +124,28 @@ def test_artifacts_keep_raw_generation_steps_without_turn_records() -> None:
     completions = [step["completion"] for step in artifacts["generation_steps"]]
     assert all("<think>reason</think>" in completion for completion in completions)
     assert "turn_records" not in artifacts
+
+
+def test_openai_compatible_generator_uses_cached_tokenizer_for_counts(monkeypatch) -> None:
+    class FakeTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            return list(text)
+
+    monkeypatch.setattr(
+        "self_summarization_agent.rllm_agent._load_cached_tokenizer",
+        lambda model_path, trust_remote_code: FakeTokenizer(),
+    )
+    generator = OpenAICompatibleGenerator(
+        client=FakeClient([]),
+        model="policy",
+        max_new_tokens=128,
+        temperature=0.7,
+        top_p=0.95,
+        tokenizer_path="tokenizer",
+    )
+
+    assert generator.count_tokens("abc") == 3
 
 
 def test_rllm_rollout_returns_trainable_steps(monkeypatch) -> None:
@@ -172,11 +216,12 @@ def test_rllm_rollout_returns_trainable_steps(monkeypatch) -> None:
     assert backend_calls == 0
 
     episode = rollout(
-        {"query_id": "q1", "query": "question", "answer": "done"},
+        SimpleNamespace(metadata={"query_id": "q1", "query": "question", "answer": "done"}),
         {"base_url": "http://localhost:8000/v1"},
     )
 
     steps = episode.trajectories[0].steps
+    assert episode.task["query_id"] == "q1"
     assert len(steps) == 2
     assert all(step.info["is_trainable"] for step in steps)
     assert steps[0].action["tool_name"] == "search"

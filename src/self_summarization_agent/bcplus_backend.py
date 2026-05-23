@@ -32,6 +32,7 @@ def _build_searcher_args(retrieval_config: RetrievalConfig) -> argparse.Namespac
         normalize=retrieval_config.normalize,
         pooling=retrieval_config.pooling,
         torch_dtype=retrieval_config.torch_dtype,
+        attn_implementation=retrieval_config.attn_implementation,
         dataset_name=retrieval_config.dataset_name,
         task_prefix=retrieval_config.task_prefix,
         max_length=retrieval_config.max_length,
@@ -69,12 +70,10 @@ class RealBrowseCompBackend:
                 self.snippet_tokenizer = None
 
     def _truncate_text(self, text: str, max_tokens: int | None) -> str:
-        if (
-            not max_tokens
-            or max_tokens <= 0
-            or self.snippet_tokenizer is None
-        ):
+        if not max_tokens or max_tokens <= 0:
             return text
+        if self.snippet_tokenizer is None:
+            return text[:max_tokens]
         tokens = self.snippet_tokenizer.encode(text, add_special_tokens=False)
         if len(tokens) <= max_tokens:
             return text

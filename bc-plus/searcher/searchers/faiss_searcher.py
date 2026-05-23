@@ -24,6 +24,23 @@ from .base import BaseSearcher
 logger = logging.getLogger(__name__)
 
 
+def _target_torch_device() -> str:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _model_load_kwargs(torch_dtype: torch.dtype, cache_dir: Optional[str], attn_implementation: Optional[str]) -> dict[str, Any]:
+    return {
+        "cache_dir": cache_dir,
+        "torch_dtype": torch_dtype,
+        "attn_implementation": attn_implementation,
+        "device_map": {"": _target_torch_device()},
+    }
+
+
+def _to_faiss_numpy(tensor: torch.Tensor) -> np.ndarray:
+    return tensor.detach().to(dtype=torch.float32, device="cpu").numpy()
+
+
 class FaissSearcher(BaseSearcher):
     @classmethod
     def parse_args(cls, parser):
@@ -161,6 +178,7 @@ class FaissSearcher(BaseSearcher):
             normalize=self.args.normalize,
             pooling=self.args.pooling,
             cache_dir=cache_dir,
+            attn_implementation=getattr(self.args, "attn_implementation", "sdpa"),
         )
 
         if self.args.torch_dtype == "float16":
@@ -175,12 +193,9 @@ class FaissSearcher(BaseSearcher):
             pooling=model_args.pooling,
             normalize=model_args.normalize,
             lora_name_or_path=model_args.lora_name_or_path,
-            cache_dir=model_args.cache_dir,
-            torch_dtype=torch_dtype,
-            attn_implementation=model_args.attn_implementation,
+            **_model_load_kwargs(torch_dtype, model_args.cache_dir, model_args.attn_implementation),
         )
 
-        self.model = self.model.to("cuda" if torch.cuda.is_available() else "cpu")
         self.model.eval()
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -266,7 +281,7 @@ class FaissSearcher(BaseSearcher):
         with torch.amp.autocast(device):
             with torch.no_grad():
                 q_reps = self.model.encode_query(batch_dict)
-                q_reps = q_reps.cpu().detach().numpy()
+                q_reps = _to_faiss_numpy(q_reps)
 
         all_scores, psg_indices = self.retriever.search(q_reps, k)
 
@@ -314,6 +329,7 @@ class ReasonIrSearcher(FaissSearcher):
             normalize=self.args.normalize,
             pooling=self.args.pooling,
             cache_dir=cache_dir,
+            attn_implementation=getattr(self.args, "attn_implementation", "sdpa"),
         )
 
         if self.args.torch_dtype == "float16":
@@ -325,11 +341,9 @@ class ReasonIrSearcher(FaissSearcher):
 
         self.model = AutoModel.from_pretrained(
             model_args.model_name_or_path,
-            cache_dir=model_args.cache_dir,
-            torch_dtype=torch_dtype,
             trust_remote_code=True,
+            **_model_load_kwargs(torch_dtype, model_args.cache_dir, model_args.attn_implementation),
         )
-        self.model = self.model.to("cuda" if torch.cuda.is_available() else "cpu")
         self.model.eval()
 
         logger.info("Model loaded successfully")
@@ -346,6 +360,7 @@ class ReasonIrSearcher(FaissSearcher):
                     [query],
                     instruction="<|user|>\nGiven a question, retrieve relevant passages that help answer the question\n<|embed|>\n",
                 )
+                q_reps = _to_faiss_numpy(q_reps)
 
         all_scores, psg_indices = self.retriever.search(q_reps, k)
 

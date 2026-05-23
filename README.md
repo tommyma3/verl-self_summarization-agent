@@ -12,7 +12,7 @@ already contains rLLM with verl support, so install only the packages needed by
 the self-summarization training code from the project root:
 
 ```bash
-uv pip install --python rllm/.venv/bin/python \
+uv pip install --python rllm/.venv/bin/python 
   "faiss-cpu>=1.13.2" \
   "pyserini>=1.2.0" \
   "tevatron @ git+https://github.com/texttron/tevatron.git@main" \
@@ -24,8 +24,7 @@ Make the local `src/self_summarization_agent` package importable from that
 virtual environment:
 
 ```bash
-printf '%s\n' "$PWD/src" > \
-  rllm/.venv/lib/python3.11/site-packages/verl_self_summarization_agent_src.pth
+printf '%s\n' "$PWD/src" > rllm/.venv/lib/python3.11/site-packages/verl_self_summarization_agent_src.pth
 ```
 
 Verify the environment:

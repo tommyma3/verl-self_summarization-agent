@@ -6,12 +6,25 @@ from pathlib import Path
 import site
 import sys
 from typing import Any
+import warnings
 
 from self_summarization_agent.config import load_train_config, parse_cli_overrides
 
 
 RLLM_CONFIG_MODULE = "rllm.experimental.config"
 RLLM_CONFIG_NAME = "unified"
+VLLM_RUNTIME_LORA_ENV = "VLLM_ALLOW_RUNTIME_LORA_UPDATING"
+CUDA_VISIBLE_DEVICES_ENV = "CUDA_VISIBLE_DEVICES"
+SUPPRESSED_FUTURE_WARNING_FILTERS = (
+    (
+        "The cuda.nvrtc module is deprecated",
+        "",
+    ),
+    (
+        "FSDP.state_dict_type",
+        "verl.workers.engine.fsdp.transformer_impl",
+    ),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,6 +32,51 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True, help="Path to an rLLM training config.")
     parser.add_argument("--set", dest="overrides", action="append", default=[], help="Override config values as key=value.")
     return parser.parse_args()
+
+
+def _count_cuda_visible_devices(value: str | None) -> int | None:
+    if value is None:
+        return None
+    devices = [device.strip() for device in value.split(",") if device.strip()]
+    return len(devices)
+
+
+def _driver_cuda_device_count() -> int:
+    import torch
+
+    return torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+
+def configured_gpu_count(config: Any) -> int:
+    gpu_ids = list(getattr(config.training, "gpu_ids", []) or [])
+    if gpu_ids:
+        return len(gpu_ids)
+
+    visible_count = _count_cuda_visible_devices(os.environ.get(CUDA_VISIBLE_DEVICES_ENV))
+    if visible_count is not None:
+        return visible_count
+
+    return _driver_cuda_device_count()
+
+
+def configure_cuda_visible_devices(config: Any) -> None:
+    """Ensure Ray/vLLM worker processes inherit usable CUDA visibility."""
+    existing_visible_devices = os.environ.get(CUDA_VISIBLE_DEVICES_ENV)
+    if existing_visible_devices:
+        return
+
+    gpu_ids = list(getattr(config.training, "gpu_ids", []) or [])
+    if gpu_ids:
+        os.environ[CUDA_VISIBLE_DEVICES_ENV] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
+        return
+
+    device_count = _driver_cuda_device_count()
+    if device_count <= 0:
+        raise RuntimeError(
+            "rLLM/verl training requires CUDA devices, but the driver process cannot see any. "
+            "Set CUDA_VISIBLE_DEVICES or run on a GPU node before starting training."
+        )
+    os.environ[CUDA_VISIBLE_DEVICES_ENV] = ",".join(str(index) for index in range(device_count))
 
 
 def build_trainer_config(config: Any) -> Any:
@@ -55,6 +113,8 @@ def build_trainer_config(config: Any) -> Any:
         "actor_rollout_ref.actor.ppo_mini_batch_size": config.rllm.ppo_mini_batch_size,
         "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": config.rllm.ppo_micro_batch_size_per_gpu,
         "actor_rollout_ref.actor.optim.lr": config.training.learning_rate,
+        "actor_rollout_ref.actor.fsdp_config.model_dtype": config.model.dtype,
+        "actor_rollout_ref.ref.fsdp_config.model_dtype": config.model.dtype,
         "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": config.rllm.ppo_micro_batch_size_per_gpu,
         "actor_rollout_ref.rollout.name": "vllm",
         "actor_rollout_ref.rollout.dtype": config.model.dtype,
@@ -72,6 +132,7 @@ def build_trainer_config(config: Any) -> Any:
         "actor_rollout_ref.rollout.val_kwargs.top_p": config.judge.top_p,
         "actor_rollout_ref.rollout.val_kwargs.do_sample": config.judge.do_sample,
         "actor_rollout_ref.rollout.val_kwargs.n": 1,
+        "actor_rollout_ref.rollout.engine_kwargs.vllm.generation_config": "vllm",
         "rllm.backend": config.rllm.backend,
         "rllm.algorithm.adv_estimator": config.rllm.algorithm,
         "rllm.rollout.n": rollout_n,
@@ -84,7 +145,9 @@ def build_trainer_config(config: Any) -> Any:
             "max_tokens": config.judge.max_new_tokens,
         },
         "rllm.workflow.n_parallel_tasks": config.rollout.max_concurrent_episodes,
-        "rllm.workflow.retry_limit": 0,
+        "rllm.workflow.retry_limit": 3,
+        "trainer.n_gpus_per_node": configured_gpu_count(config),
+        "trainer.cuda_visible_devices": os.environ.get(CUDA_VISIBLE_DEVICES_ENV),
         "rllm.trainer.logger": config.rllm.logger,
         "rllm.trainer.project_name": config.rllm.project_name,
         "rllm.trainer.experiment_name": config.rllm.experiment_name,
@@ -97,6 +160,41 @@ def build_trainer_config(config: Any) -> Any:
             if value is not None:
                 OmegaConf.update(trainer_config, key, value, merge=False)
     return trainer_config
+
+
+def configure_vllm_runtime_environment() -> None:
+    """Keep rLLM Ray defaults from enabling development-only vLLM LoRA APIs."""
+    os.environ.setdefault(VLLM_RUNTIME_LORA_ENV, "false")
+
+
+def _python_warning_option(message: str, module: str) -> str:
+    parts = ["ignore", message, "FutureWarning"]
+    if module:
+        parts.append(module)
+    return ":".join(parts)
+
+
+def configure_dependency_warning_filters() -> None:
+    """Suppress known third-party deprecation warnings in Ray worker logs."""
+    existing_options = [
+        option
+        for option in os.environ.get("PYTHONWARNINGS", "").split(",")
+        if option
+    ]
+    updated_options = list(existing_options)
+    for message, module in SUPPRESSED_FUTURE_WARNING_FILTERS:
+        warnings.filterwarnings(
+            "ignore",
+            message=message,
+            category=FutureWarning,
+            module=module,
+        )
+        option = _python_warning_option(message, module)
+        if option not in updated_options:
+            updated_options.append(option)
+
+    if updated_options:
+        os.environ["PYTHONWARNINGS"] = ",".join(updated_options)
 
 
 def ensure_worker_library_paths() -> None:
@@ -144,6 +242,9 @@ def build_search_backend(
 
 
 def build_trainer(config: Any) -> Any:
+    configure_cuda_visible_devices(config)
+    configure_vllm_runtime_environment()
+    configure_dependency_warning_filters()
     ensure_worker_library_paths()
 
     try:
@@ -161,6 +262,9 @@ def build_trainer(config: Any) -> Any:
         bc_plus_root=config.experiment.bc_plus_root,
         dataset_config=config.dataset,
         seed=config.experiment.seed,
+        tokenizer_path=config.model.model_path,
+        max_query_tokens=max(1, config.rllm.max_prompt_length - 1024),
+        trust_remote_code=config.model.trust_remote_code,
         name=f"{config.experiment.name}-rllm",
         split="train",
     )

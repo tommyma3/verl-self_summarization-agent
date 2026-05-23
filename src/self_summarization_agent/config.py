@@ -35,7 +35,7 @@ class DatasetConfig:
 
 @dataclass(slots=True)
 class RetrievalConfig:
-    backend: str = "faiss"
+    backend: str = "bm25"
     top_k: int = 5
     snippet_max_tokens: int | None = 512
     document_max_tokens: int | None = 8192
@@ -45,6 +45,7 @@ class RetrievalConfig:
     normalize: bool = False
     pooling: str = "eos"
     torch_dtype: str = "float16"
+    attn_implementation: str | None = "sdpa"
     dataset_name: str = "Tevatron/browsecomp-plus-corpus"
     task_prefix: str = DEFAULT_TASK_PREFIX
     max_length: int = 8192

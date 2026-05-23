@@ -2,10 +2,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from functools import lru_cache
 import inspect
+import logging
 from typing import Any
 
 from self_summarization_agent.launcher_utils import build_runtime
+
+LOGGER = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=4)
+def _load_cached_tokenizer(model_path: str, trust_remote_code: bool) -> Any | None:
+    try:
+        from transformers import AutoTokenizer
+    except ImportError:
+        LOGGER.warning("transformers is not installed; rLLM prompt token counts will use whitespace fallback.")
+        return None
+    try:
+        return AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+    except Exception as exc:
+        LOGGER.warning(
+            "Failed to load tokenizer from %s; rLLM prompt token counts will use whitespace fallback. %s: %s",
+            model_path,
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 @dataclass(slots=True)
@@ -15,6 +38,8 @@ class OpenAICompatibleGenerator:
     max_new_tokens: int
     temperature: float
     top_p: float
+    tokenizer_path: str | None = None
+    trust_remote_code: bool = False
 
     def generate(self, prompt: str) -> str:
         response = self.client.chat.completions.create(
@@ -27,6 +52,10 @@ class OpenAICompatibleGenerator:
         return response.choices[0].message.content or ""
 
     def count_tokens(self, text: str) -> int:
+        tokenizer_path = self.tokenizer_path or self.model
+        tokenizer = _load_cached_tokenizer(tokenizer_path, self.trust_remote_code)
+        if tokenizer is not None:
+            return len(tokenizer.encode(text, add_special_tokens=False))
         return len(text.split())
 
 
@@ -41,22 +70,33 @@ def _generation_step_to_dict(step: Any) -> dict[str, Any]:
     }
 
 
+def _task_to_mapping(task: Any) -> dict[str, Any]:
+    if isinstance(task, dict):
+        return task
+    for attr_name in ("metadata", "data"):
+        value = getattr(task, attr_name, None)
+        if isinstance(value, dict):
+            return value
+    raise TypeError(f"Expected task dict or task object with dict metadata/data, got {type(task).__name__}")
+
+
 def run_self_summarization_episode(
-    task: dict[str, Any],
+    task: Any,
     generator: Any,
     backend: Any,
     runtime_config: Any,
 ) -> dict[str, Any]:
+    task_data = _task_to_mapping(task)
     runtime = build_runtime(generator, backend, runtime_config)
-    query_id = str(task["query_id"])
-    query = str(task["query"])
+    query_id = str(task_data["query_id"])
+    query = str(task_data["query"])
     result = runtime.run(query_id, query)
 
     return {
         "artifacts": {
             "query_id": result.query_id,
             "query": query,
-            "answer": task.get("answer"),
+            "answer": task_data.get("answer"),
             "status": result.status,
             "final_answer": result.final_answer,
             "retrieved_docids": list(result.retrieved_docids),
@@ -218,7 +258,7 @@ def build_rllm_rollout(
                 raise RuntimeError("No backend or backend_factory is available for rollout execution.")
             cached_backend = backend_factory()
 
-        task_data = _get_attr(task, "data", task)
+        task_data = _task_to_mapping(task)
         client = OpenAI(base_url=_get_attr(agent_config, "base_url"), api_key=_get_attr(agent_config, "api_key", "EMPTY"))
         generator = OpenAICompatibleGenerator(
             client=client,
@@ -226,6 +266,8 @@ def build_rllm_rollout(
             max_new_tokens=_get_attr(agent_config, "max_new_tokens", config.model.max_new_tokens),
             temperature=_get_attr(agent_config, "temperature", config.model.temperature),
             top_p=_get_attr(agent_config, "top_p", config.model.top_p),
+            tokenizer_path=config.model.model_path,
+            trust_remote_code=_get_attr(config.model, "trust_remote_code", False),
         )
         payload = run_self_summarization_episode(
             task=task_data,

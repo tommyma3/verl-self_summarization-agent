@@ -59,3 +59,32 @@ def test_build_rllm_dataset_registers_tasks(monkeypatch, tmp_path: Path) -> None
     assert captured["name"] == "training"
     assert captured["split"] == "train"
     assert captured["data"] == [{"query_id": "q1", "query": "question 1", "answer": "answer 1"}]
+
+def test_build_rllm_tasks_filters_overlong_queries(monkeypatch, tmp_path: Path) -> None:
+    data_path = tmp_path / "browsecomp_plus_decrypted.jsonl"
+    data_path.write_text(
+        '{"query_id": "short", "query": "one two", "answer": "answer 1"}\n'
+        '{"query_id": "long", "query": "one two three four", "answer": "answer 2"}\n',
+        encoding="utf-8",
+    )
+
+    class FakeTokenizer:
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            return text.split()
+
+    monkeypatch.setattr(
+        "self_summarization_agent.rllm_dataset._load_tokenizer",
+        lambda tokenizer_path, *, trust_remote_code: FakeTokenizer(),
+    )
+
+    tasks = build_rllm_tasks(
+        bc_plus_root=tmp_path,
+        dataset_config=DatasetConfig(decrypted_path=str(data_path)),
+        seed=7,
+        tokenizer_path="policy",
+        max_query_tokens=2,
+    )
+
+    assert tasks == [{"query_id": "short", "query": "one two", "answer": "answer 1"}]
+
